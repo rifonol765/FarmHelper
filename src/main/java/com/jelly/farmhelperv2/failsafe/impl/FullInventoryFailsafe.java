@@ -31,7 +31,7 @@ public class FullInventoryFailsafe extends Failsafe {
 
     @Override
     public int getPriority() {
-        return 3;
+        return Integer.MAX_VALUE; // Changed from 3 to Integer.MAX_VALUE to make it lowest priority
     }
 
     @Override
@@ -41,79 +41,42 @@ public class FullInventoryFailsafe extends Failsafe {
 
     @Override
     public boolean shouldSendNotification() {
-        return FailsafeNotificationsPage.notifyOnInventoryFull;
+        return false; // Modified to never send notifications
     }
 
     @Override
     public boolean shouldPlaySound() {
-        return FailsafeNotificationsPage.alertOnFullInventory;
+        return false; // Modified to never play sounds
     }
 
     @Override
     public boolean shouldTagEveryone() {
-        return FailsafeNotificationsPage.tagEveryoneOnFullInventory;
+        return false; // Modified to never tag everyone
     }
 
     @Override
     public boolean shouldAltTab() {
-        return FailsafeNotificationsPage.autoAltTabOnInventoryFull;
+        return false; // Modified to never alt tab
     }
+    
     @Override
     public void onTickDetection(TickEvent.ClientTickEvent event) {
-        if (FailsafeManager.getInstance().isHadEmergency())
-            return;
-        if (FeatureManager.getInstance().shouldPauseMacroExecution())
-            return;
-        if (LagDetector.getInstance().isLagging() || LagDetector.getInstance().wasJustLagging()) {
-            LogUtils.sendDebug("[Failsafe] Lag detected! Cancelling full inventory failsafe...");
-            return;
-        }
-
-        if (PlayerUtils.isInventoryFull(mc.thePlayer)) {
-            if (clock.isScheduled() && clock.passed())
-                FailsafeManager.getInstance().possibleDetection(this);
-            if (!clock.isScheduled())
-                clock.schedule(555);
-
-        } else {
-            clock.reset();
-        }
+        // Completely empty method to disable detection
+        return;
     }
 
     // use item change failsafe movements
     @Override
     public void duringFailsafeTrigger() {
-        switch (itemChangeState) {
-            case NONE:
-                FailsafeManager.getInstance().scheduleRandomDelay(500, 1000);
-                itemChangeState = ItemChangeState.WAIT_BEFORE_START;
-                break;
-            case WAIT_BEFORE_START:
-                MacroHandler.getInstance().pauseMacro();
-                KeyBindUtils.stopMovement();
-                itemChangeState = ItemChangeState.LOOK_AROUND;
-                FailsafeManager.getInstance().scheduleRandomDelay(500, 500);
-                break;
-            case LOOK_AROUND:
-                MovRecPlayer.getInstance().playRandomRecording("ITEM_CHANGE_");
-                itemChangeState = ItemChangeState.SWAP_BACK_ITEM;
-                break;
-            case SWAP_BACK_ITEM:
-                if (MovRecPlayer.getInstance().isRunning()) return;
-                itemChangeState = ItemChangeState.END;
-                FailsafeManager.getInstance().scheduleRandomDelay(500, 1000);
-                break;
-            case END:
-                PlayerUtils.getTool();
-                endOfFailsafeTrigger();
-                break;
-        }
+        // Skip directly to the end state
+        endOfFailsafeTrigger();
     }
 
     @Override
     public void endOfFailsafeTrigger() {
         FailsafeManager.getInstance().stopFailsafes();
-
+        
+        // Optional: You can comment this out if you don't want auto-sell to trigger
         Multithreading.schedule(() -> {
             if (GameStateHandler.getInstance().getCookieBuffState() != GameStateHandler.BuffState.ACTIVE) {
                 LogUtils.sendDebug("[Failsafe] Looking at sb menu...");
