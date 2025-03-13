@@ -41,7 +41,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         name: Upload built mod JAR
         with:
-          name: mod-jar
+          name: FarmHelper-jar
           path: build/libs/*.jar
       - name: Create release with files
         uses: softprops/action-gh-release@v2
