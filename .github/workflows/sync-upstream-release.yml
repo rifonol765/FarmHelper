@@ -1,0 +1,155 @@
+name: Sync Upstream Release and Build
+
+on:
+  workflow_dispatch: # Allow manual triggering
+  schedule:
+    # Runs every hour (adjust cron schedule as needed)
+    # See https://crontab.guru/ for help
+    - cron: '0 * * * *'
+
+jobs:
+  sync_and_build:
+    runs-on: ubuntu-latest
+    # Prevent multiple runs if scheduled trigger overlaps with commits
+    concurrency: 
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout Fork Repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch all history so we can check for existing tags and merge
+          fetch-depth: 0
+          # Use PAT to allow pushing merge commits and creating releases
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add Upstream Remote
+        # IMPORTANT: Replace UPSTREAM_OWNER/UPSTREAM_REPO with the actual owner and repo name
+        run: git remote add upstream https://github.com/UPSTREAM_OWNER/UPSTREAM_REPO.git
+
+      - name: Fetch Upstream Tags
+        run: git fetch upstream --tags
+
+      - name: Install GitHub CLI
+        uses: github/hub@v2.14.2 # Installs 'hub', which bundles 'gh' CLI
+
+      - name: Install jq (JSON Processor)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Get Latest Upstream Release Info
+        id: upstream_release
+        env:
+          # Use built-in token for read-only API access here
+          GH_TOKEN: ${{ github.token }}
+          # IMPORTANT: Replace UPSTREAM_OWNER/UPSTREAM_REPO again
+          UPSTREAM_REPO: UPSTREAM_OWNER/UPSTREAM_REPO
+        run: |
+          echo "Fetching latest release from $UPSTREAM_REPO..."
+          # Get the very latest release (could be stable or pre-release)
+          # Use gh release list which sorts by creation date descending
+          latest_release_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName,isPrerelease,name,body)
+
+          if [[ -z "$latest_release_json" || "$latest_release_json" == "[]" ]]; then
+            echo "No releases found on upstream repository $UPSTREAM_REPO."
+            # Exit cleanly or set an output flag? For now, exit non-zero to stop workflow.
+            exit 1
+          fi
+
+          echo "Latest upstream release info: $latest_release_json"
+          tag_name=$(echo "$latest_release_json" | jq -r '.[0].tagName')
+          is_prerelease=$(echo "$latest_release_json" | jq -r '.[0].isPrerelease')
+          release_name=$(echo "$latest_release_json" | jq -r '.[0].name')
+          release_body=$(echo "$latest_release_json" | jq -r '.[0].body')
+
+          # Check if tag_name is empty or null (jq returns 'null' as a string)
+          if [[ -z "$tag_name" || "$tag_name" == "null" ]]; then
+            echo "Could not extract tag name from latest release."
+            exit 1
+          fi
+
+          echo "Latest upstream tag: $tag_name"
+          echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$is_prerelease" >> $GITHUB_OUTPUT
+          echo "release_name=$release_name" >> $GITHUB_OUTPUT
+          # Handle multi-line body for output
+          echo "release_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$release_body" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check if Tag Already Exists in Fork
+        id: check_tag
+        run: |
+          # Check local tags (we fetched upstream tags, but release uses fork tags)
+          if git rev-parse --verify --quiet "refs/tags/${{ steps.upstream_release.outputs.tag_name }}"; then
+            echo "Tag ${{ steps.upstream_release.outputs.tag_name }} already exists in fork. Skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag ${{ steps.upstream_release.outputs.tag_name }} does not exist in fork. Proceeding."
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Merge Upstream Tag
+        if: steps.check_tag.outputs.skip == 'false'
+        run: |
+          # IMPORTANT: Replace 'main' if your default branch is different (e.g., 'master')
+          DEFAULT_BRANCH=main
+          git checkout $DEFAULT_BRANCH
+          echo "Pulling latest changes from fork's origin $DEFAULT_BRANCH..."
+          git pull origin $DEFAULT_BRANCH
+          echo "Attempting to merge upstream tag ${{ steps.upstream_release.outputs.tag_name }} into $DEFAULT_BRANCH..."
+          # Merge the specific tag, creating a merge commit even if fast-forward is possible
+          # If merge conflicts occur, this step will fail the workflow run.
+          git merge "refs/tags/${{ steps.upstream_release.outputs.tag_name }}" --no-ff -m "Merge upstream tag ${{ steps.upstream_release.outputs.tag_name }}" || {
+            echo "Merge failed. Please resolve conflicts manually."
+            exit 1
+          }
+
+      - name: Push Merge Commit
+        if: steps.check_tag.outputs.skip == 'false'
+        run: |
+          # IMPORTANT: Replace 'main' if your default branch is different
+          DEFAULT_BRANCH=main
+          echo "Pushing merge commit to origin/$DEFAULT_BRANCH..."
+          git push origin $DEFAULT_BRANCH
+
+      # --- Your Original Build Steps (adapted) ---
+
+      - uses: actions/setup-java@v4
+        name: Setup Java
+        if: steps.check_tag.outputs.skip == 'false'
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v3
+        name: Setup Gradle
+        if: steps.check_tag.outputs.skip == 'false'
+
+      - name: Execute Gradle build
+        if: steps.check_tag.outputs.skip == 'false'
+        run: ./gradlew build
+
+      - name: Create Fork Release
+        if: steps.check_tag.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          # Use the tag, name, body, and prerelease status from the upstream release
+          tag_name: ${{ steps.upstream_release.outputs.tag_name }}
+          name: ${{ steps.upstream_release.outputs.release_name }}
+          body: ${{ steps.upstream_release.outputs.release_body }}
+          prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
+          files: |
+            build/libs/*.jar
+          # Use the PAT for creating the release in your fork
+          token: ${{ secrets.GH_PAT }}
+
+      # Optional: Add steps here to notify via Discord etc., using the release info
+      # Note: Your original steps for Discord notification would need adapting
+      #       as the context `github.event.head_commit` won't be relevant in the same way.
+      #       You'd use info from the `steps.upstream_release.outputs` instead.
