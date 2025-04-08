@@ -1,5 +1,7 @@
 name: Run Gradle Build
-on: [ push ]
+on:
+  push:
+  workflow_dispatch:
 jobs:
   gradle:
     runs-on: ubuntu-latest
@@ -41,7 +43,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         name: Upload built mod JAR
         with:
-          name: mod-jar
+          name: FarmHelper.jar
           path: build/libs/*.jar
       - name: Create release with files
         uses: softprops/action-gh-release@v2
@@ -60,7 +62,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      # Step 5: Check for required secret variables
       - name: Check for DISCORD_WEBHOOK_URL
         id: check_secrets
         run: |
@@ -72,7 +73,6 @@ jobs:
             echo "result=success" >> $GITHUB_OUTPUT
           fi
 
-      # Step 6: Get variables for embed message
       - name: Send embed message with timestamp and footer
         id: variables
         if: ${{ (steps.check_secrets.outputs.result == 'success') && (steps.get_version.outputs.shouldRelease == 'true') }}
@@ -90,16 +90,15 @@ jobs:
           else
               TITLE="Release"
           fi
-          TITLE="${TITLE} ${VERSION}" >> $GITHUB_OUTPUT
-          
+          echo "TITLE=${TITLE} ${VERSION}" >> $GITHUB_OUTPUT
+
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
           echo "LONG_DATE=$LONG_DATE" >> $GITHUB_OUTPUT
           echo "COMMIT_URL=$COMMIT_URL" >> $GITHUB_OUTPUT
           echo "SHORT_COMMIT_SHA=$SHORT_COMMIT_SHA" >> $GITHUB_OUTPUT
           echo "escaped_commit_message=$escaped_commit_message" >> $GITHUB_OUTPUT
-          echo "TITLE=$TITLE" >> $GITHUB_OUTPUT
 
-        # Step 7: Send embed message with files
+
       - name: Send embed message with files
         if: ${{ (steps.check_secrets.outputs.result == 'success') && (steps.get_version.outputs.shouldRelease == 'true') }}
         uses: hugoalh/send-discord-webhook-ghaction@v6.0.0
@@ -132,7 +131,6 @@ jobs:
               }
             ]
 
-      # Step 7: Send built JAR files to Discord webhook
       - name: Send build artifacts to Discord webhook
         if: ${{ (steps.check_secrets.outputs.result == 'success') && (steps.get_version.outputs.shouldRelease == 'true') }}
         run: |
