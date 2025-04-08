@@ -11,7 +11,7 @@ jobs:
   sync_and_build:
     runs-on: ubuntu-latest
     # Prevent multiple runs if scheduled trigger overlaps with commits
-    concurrency: 
+    concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
 
@@ -22,7 +22,7 @@ jobs:
           # Fetch all history so we can check for existing tags and merge
           fetch-depth: 0
           # Use PAT to allow pushing merge commits and creating releases
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ secrets.GH_PAT }} # Ensure this secret exists in your fork
 
       - name: Set up Git
         run: |
@@ -30,8 +30,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Add Upstream Remote
-        # IMPORTANT: Replace UPSTREAM_OWNER/UPSTREAM_REPO with the actual owner and repo name
-        run: git remote add upstream https://github.com/UPSTREAM_OWNER/UPSTREAM_REPO.git
+        # Upstream repository set here
+        run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper.git
 
       - name: Fetch Upstream Tags
         run: git fetch upstream --tags
@@ -47,18 +47,18 @@ jobs:
         env:
           # Use built-in token for read-only API access here
           GH_TOKEN: ${{ github.token }}
-          # IMPORTANT: Replace UPSTREAM_OWNER/UPSTREAM_REPO again
-          UPSTREAM_REPO: UPSTREAM_OWNER/UPSTREAM_REPO
+          # Upstream repository set here for gh command
+          UPSTREAM_REPO: JellyLabScripts/FarmHelper
         run: |
           echo "Fetching latest release from $UPSTREAM_REPO..."
           # Get the very latest release (could be stable or pre-release)
-          # Use gh release list which sorts by creation date descending
           latest_release_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName,isPrerelease,name,body)
 
           if [[ -z "$latest_release_json" || "$latest_release_json" == "[]" ]]; then
             echo "No releases found on upstream repository $UPSTREAM_REPO."
-            # Exit cleanly or set an output flag? For now, exit non-zero to stop workflow.
-            exit 1
+            # Exit cleanly to avoid failing the scheduled run if no releases exist yet
+            echo "No new release found. Exiting cleanly."
+            exit 0 # Exit successfully
           fi
 
           echo "Latest upstream release info: $latest_release_json"
@@ -67,10 +67,10 @@ jobs:
           release_name=$(echo "$latest_release_json" | jq -r '.[0].name')
           release_body=$(echo "$latest_release_json" | jq -r '.[0].body')
 
-          # Check if tag_name is empty or null (jq returns 'null' as a string)
+          # Check if tag_name is empty or null
           if [[ -z "$tag_name" || "$tag_name" == "null" ]]; then
             echo "Could not extract tag name from latest release."
-            exit 1
+            exit 1 # Exit with error if tag couldn't be extracted
           fi
 
           echo "Latest upstream tag: $tag_name"
@@ -133,6 +133,7 @@ jobs:
 
       - name: Execute Gradle build
         if: steps.check_tag.outputs.skip == 'false'
+        # Assuming the gradle wrapper is at the root
         run: ./gradlew build
 
       - name: Create Fork Release
@@ -145,11 +146,9 @@ jobs:
           body: ${{ steps.upstream_release.outputs.release_body }}
           prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
           files: |
-            build/libs/*.jar
+            build/libs/*.jar # Make sure this path correctly points to your built artifact(s)
           # Use the PAT for creating the release in your fork
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ secrets.GH_PAT }} # Ensure this secret exists in your fork
 
       # Optional: Add steps here to notify via Discord etc., using the release info
-      # Note: Your original steps for Discord notification would need adapting
-      #       as the context `github.event.head_commit` won't be relevant in the same way.
-      #       You'd use info from the `steps.upstream_release.outputs` instead.
+      # from steps.upstream_release.outputs and the build artifact path.
