@@ -158,7 +158,43 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
         name: Setup Gradle
         if: steps.check_fork_release.outputs.skip == 'false'
+      - name: Execute Gradle build
+        if: steps.check_fork_release.outputs.skip == 'false'
+        run: ./gradlew build
 
+      # --- BEGIN ADDED DEBUG STEP ---
+      - name: List build artifacts # Add this step for debugging
+        if: steps.check_fork_release.outputs.skip == 'false'
+        run: |
+          echo "Current working directory: $(pwd)"
+          echo "Listing contents of build/:"
+          ls -l build || echo "build directory not found."
+          echo "Listing contents of build/libs:"
+          ls -l build/libs || echo "build/libs directory not found or empty."
+          echo "Listing all JAR files under build/:"
+          find build -name '*.jar' || echo "No .jar files found under build/."
+      # --- END ADDED DEBUG STEP ---
+
+      - name: Create Fork Release
+        if: steps.check_fork_release.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.upstream_release.outputs.tag_name }}
+          name: ${{ steps.upstream_release.outputs.release_name }}
+          body: ${{ steps.upstream_release.outputs.release_body }}
+          prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
+          # --- POTENTIAL FIX 1: Remove the comment just in case ---
+          # files: build/libs/*.jar
+          # --- POTENTIAL FIX 2: Adjust path based on debug output ---
+          # Example: If debug shows it's in build/libs/YourModName-Version.jar
+          # files: build/libs/YourModName-*.jar
+          # Example: If debug shows it's in build/distributions/
+          # files: build/distributions/*.jar
+          # --- CURRENT CONFIGURATION (Likely needs changing) ---
+          files: |
+            build/libs/*.jar
+          token: ${{ secrets.GH_PAT }}
+          
       - name: Execute Gradle build
         if: steps.check_fork_release.outputs.skip == 'false'
         # Assuming the gradle wrapper is at the root
