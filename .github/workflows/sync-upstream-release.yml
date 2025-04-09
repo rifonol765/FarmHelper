@@ -1,3 +1,5 @@
+# .github/workflows/sync-upstream-release.yml
+
 name: Sync Upstream Release and Build
 
 on:
@@ -33,8 +35,18 @@ jobs:
         # Upstream repository set here
         run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper.git
 
-      - name: Fetch Upstream Tags
-        run: git fetch upstream --tags
+      - name: Check Remotes and Connectivity # ADDED DEBUG STEP
+        run: |
+          echo "--- Configured Remotes ---"
+          git remote -v
+          echo "--- Testing Connectivity to Upstream ---"
+          # Try getting headers from upstream repo page
+          curl -I https://github.com/JellyLabScripts/FarmHelper.git
+
+      - name: Fetch Upstream Tags # MODIFIED STEP (added -v)
+        run: |
+          echo "Fetching upstream tags with verbose output..."
+          git fetch upstream --tags -v # Add -v for verbose output
 
       - name: Install GitHub CLI
         uses: github/hub@v2.14.2 # Installs 'hub', which bundles 'gh' CLI
@@ -42,7 +54,7 @@ jobs:
       - name: Install jq (JSON Processor)
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Get Latest Upstream Release Info
+      - name: Get Latest Upstream Release Info # CORRECTED VERSION
         id: upstream_release
         env:
           # Use built-in token for read-only API access here
@@ -51,7 +63,6 @@ jobs:
           UPSTREAM_REPO: JellyLabScripts/FarmHelper
         run: |
           echo "Fetching latest release tag from $UPSTREAM_REPO..."
-          # Get the tag name of the very latest release (stable or pre-release)
           latest_release_tag_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName)
 
           if [[ -z "$latest_release_tag_json" || "$latest_release_tag_json" == "[]" ]]; then
@@ -62,7 +73,6 @@ jobs:
 
           tag_name=$(echo "$latest_release_tag_json" | jq -r '.[0].tagName')
 
-          # Check if tag_name is empty or null
           if [[ -z "$tag_name" || "$tag_name" == "null" ]]; then
             echo "Could not extract tag name from the latest release listing."
             exit 1 # Exit with error
@@ -71,7 +81,6 @@ jobs:
           echo "Latest upstream tag found: $tag_name"
           echo "Fetching details for tag $tag_name..."
 
-          # Now view the specific release details using the tag_name
           release_details_json=$(gh release view "$tag_name" --repo $UPSTREAM_REPO --json tagName,isPrerelease,name,body)
 
           if [[ -z "$release_details_json" ]]; then
@@ -80,40 +89,31 @@ jobs:
           fi
 
           echo "Full release details: $release_details_json"
-          # Re-verify tag name just in case, though it should match
           fetched_tag_name=$(echo "$release_details_json" | jq -r '.tagName')
           is_prerelease=$(echo "$release_details_json" | jq -r '.isPrerelease')
           release_name=$(echo "$release_details_json" | jq -r '.name')
           release_body=$(echo "$release_details_json" | jq -r '.body')
 
-          # Final check if details were retrieved correctly
           if [[ -z "$fetched_tag_name" || "$fetched_tag_name" == "null" ]]; then
              echo "Could not extract details from release view for tag $tag_name."
              exit 1
           fi
 
-          # Set outputs using the confirmed tag name from the initial list command
           echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
           echo "is_prerelease=$is_prerelease" >> $GITHUB_OUTPUT
           echo "release_name=$release_name" >> $GITHUB_OUTPUT
-          # Handle multi-line body for output
           echo "release_body<<EOF" >> $GITHUB_OUTPUT
           echo "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          
-      - name: Check if Release Exists in Fork for this Tag
+
+      - name: Check if Release Exists in Fork for this Tag # CORRECTED CHECK
         id: check_fork_release
         env:
-          # Use PAT here as well, in case fork is private (though gh might use GITHUB_TOKEN implicitly)
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          # Use built-in variable for the fork's repository name (e.g., YourUsername/FarmHelper)
           FORK_REPO: ${{ github.repository }}
           TAG_NAME: ${{ steps.upstream_release.outputs.tag_name }}
         run: |
           echo "Checking for existing release with tag '$TAG_NAME' in fork repository '$FORK_REPO'..."
-          # Attempt to view the release on the fork using the tag name.
-          # Redirect stderr to /dev/null to suppress "release not found" errors from gh.
-          # Check the exit code ($?) of the gh command. 0 means success (release found).
           if gh release view "$TAG_NAME" --repo "$FORK_REPO" > /dev/null 2>&1; then
             echo "Release with tag '$TAG_NAME' already exists in the fork '$FORK_REPO'. Skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
@@ -123,30 +123,30 @@ jobs:
           fi
 
       - name: Merge Upstream Tag
+        # Use the corrected check step ID and updated branch name
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # IMPORTANT: Replace 'main' if your default branch is different (e.g., 'master')
+          # UPDATED: Use 'master' as the default branch
           DEFAULT_BRANCH=master
           git checkout $DEFAULT_BRANCH
           echo "Pulling latest changes from fork's origin $DEFAULT_BRANCH..."
           git pull origin $DEFAULT_BRANCH
           echo "Attempting to merge upstream tag ${{ steps.upstream_release.outputs.tag_name }} into $DEFAULT_BRANCH..."
-          # Merge the specific tag, creating a merge commit even if fast-forward is possible
-          # If merge conflicts occur, this step will fail the workflow run.
           git merge "refs/tags/${{ steps.upstream_release.outputs.tag_name }}" --no-ff -m "Merge upstream tag ${{ steps.upstream_release.outputs.tag_name }}" || {
             echo "Merge failed. Please resolve conflicts manually."
             exit 1
           }
 
       - name: Push Merge Commit
+        # Use the corrected check step ID and updated branch name
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # IMPORTANT: Replace 'main' if your default branch is different
+          # UPDATED: Use 'master' as the default branch
           DEFAULT_BRANCH=master
           echo "Pushing merge commit to origin/$DEFAULT_BRANCH..."
           git push origin $DEFAULT_BRANCH
 
-      # --- Your Original Build Steps (adapted) ---
+      # --- Build Steps ---
 
       - uses: actions/setup-java@v4
         name: Setup Java
@@ -158,12 +158,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v3
         name: Setup Gradle
         if: steps.check_fork_release.outputs.skip == 'false'
+
       - name: Execute Gradle build
         if: steps.check_fork_release.outputs.skip == 'false'
         run: ./gradlew build
 
-      # --- BEGIN ADDED DEBUG STEP ---
-      - name: List build artifacts # Add this step for debugging
+      # --- Debug Artifact Location ---
+      - name: List build artifacts
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
           echo "Current working directory: $(pwd)"
@@ -173,8 +174,8 @@ jobs:
           ls -l build/libs || echo "build/libs directory not found or empty."
           echo "Listing all JAR files under build/:"
           find build -name '*.jar' || echo "No .jar files found under build/."
-      # --- END ADDED DEBUG STEP ---
 
+      # --- Create Release ---
       - name: Create Fork Release
         if: steps.check_fork_release.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
@@ -183,36 +184,10 @@ jobs:
           name: ${{ steps.upstream_release.outputs.release_name }}
           body: ${{ steps.upstream_release.outputs.release_body }}
           prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
-          # --- POTENTIAL FIX 1: Remove the comment just in case ---
-          # files: build/libs/*.jar
-          # --- POTENTIAL FIX 2: Adjust path based on debug output ---
-          # Example: If debug shows it's in build/libs/YourModName-Version.jar
-          # files: build/libs/YourModName-*.jar
-          # Example: If debug shows it's in build/distributions/
-          # files: build/distributions/*.jar
-          # --- CURRENT CONFIGURATION (Likely needs changing) ---
+          # IMPORTANT: Verify this path based on the 'List build artifacts' step output
           files: |
             build/libs/*.jar
-          token: ${{ secrets.GH_PAT }}
-          
-      - name: Execute Gradle build
-        if: steps.check_fork_release.outputs.skip == 'false'
-        # Assuming the gradle wrapper is at the root
-        run: ./gradlew build
-
-      - name: Create Fork Release
-        if: steps.check_fork_release.outputs.skip == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          # Use the tag, name, body, and prerelease status from the upstream release
-          tag_name: ${{ steps.upstream_release.outputs.tag_name }}
-          name: ${{ steps.upstream_release.outputs.release_name }}
-          body: ${{ steps.upstream_release.outputs.release_body }}
-          prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
-          files: |
-            build/libs/*.jar # Make sure this path correctly points to your built artifact(s)
-          # Use the PAT for creating the release in your fork
-          token: ${{ secrets.GH_PAT }} # Ensure this secret exists in your fork
+          token: ${{ secrets.GH_PAT }} # Use PAT for release creation
 
       # Optional: Add steps here to notify via Discord etc., using the release info
       # from steps.upstream_release.outputs and the build artifact path.
