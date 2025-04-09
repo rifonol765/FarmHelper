@@ -60,22 +60,17 @@ jobs:
 
       - name: Fetch Upstream Tags - FOCUSED DEBUG
         env:
-          GIT_TRACE: 1             # Git internal tracing
-          GIT_TRACE_PACKET: 1    # Trace network packet data (more detail)
-          GIT_TRACE_PERFORMANCE: 1 # Trace performance data
-          GIT_CURL_VERBOSE: 1      # Verbose curl output
-          # Ensure no proxy interferes (usually not needed on GH runners)
+          GIT_TRACE: 1
+          GIT_TRACE_PACKET: 1
+          GIT_TRACE_PERFORMANCE: 1
+          GIT_CURL_VERBOSE: 1
           NO_PROXY: '*'
         run: |
           echo "================== GIT CONFIG BEFORE FETCH =================="
           git config --list --show-origin
-          echo "================== STARTING FETCH =================="
-          # Using the non-.git URL as determined before
-          # Adding --progress to see more feedback during potential hangs
-          # Adding --no-tags temporarily to see if fetching just branches works
-          # git fetch upstream --tags -v --progress
-          # LET'S TRY FETCHING ONLY THE DEFAULT BRANCH FIRST to simplify
-          git fetch upstream master -v --progress
+          echo "================== STARTING FETCH (TAGS) =================="
+          # --- CHANGE THIS LINE BACK TO FETCH TAGS ---
+          git fetch upstream --tags -v --progress
           echo "================== FETCH COMMAND EXIT CODE: $? =================="
 
       # ... (rest of the steps, but they likely won't run if fetch fails)
