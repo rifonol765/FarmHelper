@@ -19,8 +19,8 @@ jobs:
       - name: Checkout Fork Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GH_PAT }} # Ensure this secret exists in your fork
+          fetch-depth: 0 # Keep fetch-depth: 0 to have history for merging
+          token: ${{ secrets.GH_PAT }}
 
       - name: Set up Git
         run: |
@@ -28,36 +28,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Add Upstream Remote
-        # Use the URL without .git for HTTPS
         run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper
 
-      # --- Fetch Upstream Tags (Corrected Command) ---
-      # This step now fetches TAGS instead of just the master branch
-      # Verbose flags are kept temporarily for debugging if it fails again
-      - name: Fetch Upstream Tags
-        env:
-          GIT_TRACE: 1
-          GIT_TRACE_PACKET: 1
-          GIT_TRACE_PERFORMANCE: 1
-          GIT_CURL_VERBOSE: 1
-          NO_PROXY: '*'
-        run: |
-          echo "================== GIT CONFIG BEFORE FETCH =================="
-          git config --list --show-origin
-          echo "================== STARTING FETCH (TAGS) =================="
-          # --- THIS IS THE CRUCIAL LINE - Fetching --tags ---
-          git fetch upstream --tags -v --progress
-          echo "================== FETCH COMMAND EXIT CODE: $? =================="
-          # Ensure the command succeeded before proceeding
-          if [ $? -ne 0 ]; then
-            echo "!! Fetch command failed with non-zero exit code !!"
-            exit 1
-          fi
-
-      # --- Subsequent Steps ---
-
+      # --- MOVED STEPS: Determine tag name BEFORE fetching ---
       - name: Install GitHub CLI
-        uses: github/hub@v2.14.2 # Installs 'hub', which bundles 'gh' CLI
+        uses: github/hub@v2.14.2
 
       - name: Install jq (JSON Processor)
         run: sudo apt-get update && sudo apt-get install -y jq
@@ -74,38 +49,31 @@ jobs:
           if [[ -z "$latest_release_tag_json" || "$latest_release_tag_json" == "[]" ]]; then
             echo "No releases found on upstream repository $UPSTREAM_REPO."
             echo "No new release found. Exiting cleanly."
-            exit 0 # Exit successfully
+            exit 0
           fi
 
           tag_name=$(echo "$latest_release_tag_json" | jq -r '.[0].tagName')
 
           if [[ -z "$tag_name" || "$tag_name" == "null" ]]; then
             echo "Could not extract tag name from the latest release listing."
-            exit 1 # Exit with error
+            exit 1
           fi
-
           echo "Latest upstream tag found: $tag_name"
-          echo "Fetching details for tag $tag_name..."
+          echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
 
-          release_details_json=$(gh release view "$tag_name" --repo $UPSTREAM_REPO --json tagName,isPrerelease,name,body)
+          # Fetch full details *after* getting the tag name
+          echo "Fetching details for tag $tag_name..."
+          release_details_json=$(gh release view "$tag_name" --repo $UPSTREAM_REPO --json isPrerelease,name,body)
 
           if [[ -z "$release_details_json" ]]; then
              echo "Could not fetch details for release tag $tag_name."
-             exit 1 # Exit with error
+             exit 1
           fi
 
-          echo "Full release details: $release_details_json"
-          fetched_tag_name=$(echo "$release_details_json" | jq -r '.tagName')
           is_prerelease=$(echo "$release_details_json" | jq -r '.isPrerelease')
           release_name=$(echo "$release_details_json" | jq -r '.name')
           release_body=$(echo "$release_details_json" | jq -r '.body')
 
-          if [[ -z "$fetched_tag_name" || "$fetched_tag_name" == "null" ]]; then
-             echo "Could not extract details from release view for tag $tag_name."
-             exit 1
-          fi
-
-          echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
           echo "is_prerelease=$is_prerelease" >> $GITHUB_OUTPUT
           echo "release_name=$release_name" >> $GITHUB_OUTPUT
           echo "release_body<<EOF" >> $GITHUB_OUTPUT
@@ -114,6 +82,7 @@ jobs:
 
       - name: Check if Release Exists in Fork for this Tag
         id: check_fork_release
+        # This check uses the GitHub API, doesn't require the tag locally yet
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           FORK_REPO: ${{ github.repository }}
@@ -128,15 +97,37 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
+      # --- MODIFIED FETCH STEP ---
+      # Fetch ONLY the specific required tag and the master branch
+      - name: Fetch Specific Upstream Tag and Master Branch
+        # Only run if we determined we need to proceed
+        if: steps.check_fork_release.outputs.skip == 'false'
+        env:
+          # Keep verbose flags just in case this specific fetch fails
+          GIT_CURL_VERBOSE: 1
+        run: |
+          TARGET_TAG="${{ steps.upstream_release.outputs.tag_name }}"
+          echo "Fetching specific tag '$TARGET_TAG' and branch 'master' from upstream..."
+          # Fetch the tag using an explicit refspec
+          # The refspec ensures the local tag name matches the remote one
+          git fetch upstream "refs/tags/$TARGET_TAG:refs/tags/$TARGET_TAG" -v --progress --no-tags
+          # Also fetch the master branch to ensure history for merge is available
+          git fetch upstream master -v --progress --no-tags
+          echo "Fetch command finished."
+          # Verify tag was fetched locally
+          git tag -l "$TARGET_TAG" || exit 1
+
+      # --- Merge and Following Steps ---
+
       - name: Merge Upstream Tag
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          DEFAULT_BRANCH=master # Using master as default branch
+          DEFAULT_BRANCH=master
           git checkout $DEFAULT_BRANCH
           echo "Pulling latest changes from fork's origin $DEFAULT_BRANCH..."
-          git pull origin $DEFAULT_BRANCH
+          git pull origin $DEFAULT_BRANCH || { echo "Pull failed"; exit 1; } # Added error check
           echo "Attempting to merge upstream tag ${{ steps.upstream_release.outputs.tag_name }} into $DEFAULT_BRANCH..."
-          # Use the specific tag ref fetched from upstream
+          # Now merge the tag ref that we specifically fetched
           git merge "refs/tags/${{ steps.upstream_release.outputs.tag_name }}" --no-ff -m "Merge upstream tag ${{ steps.upstream_release.outputs.tag_name }}" || {
             echo "Merge failed. Please resolve conflicts manually."
             exit 1
@@ -145,12 +136,11 @@ jobs:
       - name: Push Merge Commit
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          DEFAULT_BRANCH=master # Using master as default branch
+          DEFAULT_BRANCH=master
           echo "Pushing merge commit to origin/$DEFAULT_BRANCH..."
           git push origin $DEFAULT_BRANCH
 
       # --- Build Steps ---
-
       - uses: actions/setup-java@v4
         name: Setup Java
         if: steps.check_fork_release.outputs.skip == 'false'
@@ -166,17 +156,11 @@ jobs:
         if: steps.check_fork_release.outputs.skip == 'false'
         run: ./gradlew build
 
-      # --- Debug Artifact Location ---
-      - name: List build artifacts
+      - name: List build artifacts # Keep this for verification
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          echo "Current working directory: $(pwd)"
-          echo "Listing contents of build/:"
-          ls -l build || echo "build directory not found."
           echo "Listing contents of build/libs:"
           ls -l build/libs || echo "build/libs directory not found or empty."
-          echo "Listing all JAR files under build/:"
-          find build -name '*.jar' || echo "No .jar files found under build/."
 
       # --- Create Release ---
       - name: Create Fork Release
@@ -187,7 +171,6 @@ jobs:
           name: ${{ steps.upstream_release.outputs.release_name }}
           body: ${{ steps.upstream_release.outputs.release_body }}
           prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
-          # Make sure this path is correct based on 'List build artifacts' output
-          files: |
+          files: | # Adjust this path if 'List build artifacts' shows something different
             build/libs/*.jar
-          token: ${{ secrets.GH_PAT }} # Use PAT for release creation
+          token: ${{ secrets.GH_PAT }}
