@@ -43,10 +43,14 @@ jobs:
           # Try getting headers from upstream repo page
           curl -I https://github.com/JellyLabScripts/FarmHelper.git
 
-      - name: Fetch Upstream Tags # MODIFIED STEP (added -v)
+      - name: Fetch Upstream Tags # ADD GIT TRACE ENV VARS
+        env:
+          GIT_TRACE: 1         # Enable basic Git tracing
+          GIT_CURL_VERBOSE: 1  # Make Git's curl operations verbose
         run: |
-          echo "Fetching upstream tags with verbose output..."
-          git fetch upstream --tags -v # Add -v for verbose output
+          echo "Fetching upstream tags with maximum verbosity..."
+          # The -v flag is still useful alongside the env vars
+          git fetch upstream --tags -v
 
       - name: Install GitHub CLI
         uses: github/hub@v2.14.2 # Installs 'hub', which bundles 'gh' CLI
