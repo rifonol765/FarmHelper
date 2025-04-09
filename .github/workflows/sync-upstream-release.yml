@@ -55,13 +55,30 @@ jobs:
           echo "Verifying Git maintenance config:"
           git config --local --list | grep maintenance || echo "No local maintenance config found."
 
-      - name: Fetch Upstream Tags # Keep GIT_TRACE and GIT_CURL_VERBOSE for now, just in case
+      # ... (steps before fetching: Add Upstream Remote)
+      # Note: Removed 'Check Remotes' and 'Disable Maintenance' for now to isolate fetch
+
+      - name: Fetch Upstream Tags - FOCUSED DEBUG
         env:
-          GIT_TRACE: 1
-          GIT_CURL_VERBOSE: 1
+          GIT_TRACE: 1             # Git internal tracing
+          GIT_TRACE_PACKET: 1    # Trace network packet data (more detail)
+          GIT_TRACE_PERFORMANCE: 1 # Trace performance data
+          GIT_CURL_VERBOSE: 1      # Verbose curl output
+          # Ensure no proxy interferes (usually not needed on GH runners)
+          NO_PROXY: '*'
         run: |
-          echo "Fetching upstream tags with maximum verbosity (auto maintenance disabled)..."
-          git fetch upstream --tags -v
+          echo "================== GIT CONFIG BEFORE FETCH =================="
+          git config --list --show-origin
+          echo "================== STARTING FETCH =================="
+          # Using the non-.git URL as determined before
+          # Adding --progress to see more feedback during potential hangs
+          # Adding --no-tags temporarily to see if fetching just branches works
+          # git fetch upstream --tags -v --progress
+          # LET'S TRY FETCHING ONLY THE DEFAULT BRANCH FIRST to simplify
+          git fetch upstream master -v --progress
+          echo "================== FETCH COMMAND EXIT CODE: $? =================="
+
+      # ... (rest of the steps, but they likely won't run if fetch fails)
 
       # ... (rest of the steps)
 
