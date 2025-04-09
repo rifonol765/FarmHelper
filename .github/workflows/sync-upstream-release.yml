@@ -101,20 +101,29 @@ jobs:
           echo "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           
-      - name: Check if Tag Already Exists in Fork
-        id: check_tag
+      - name: Check if Release Exists in Fork for this Tag
+        id: check_fork_release
+        env:
+          # Use PAT here as well, in case fork is private (though gh might use GITHUB_TOKEN implicitly)
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Use built-in variable for the fork's repository name (e.g., YourUsername/FarmHelper)
+          FORK_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ steps.upstream_release.outputs.tag_name }}
         run: |
-          # Check local tags (we fetched upstream tags, but release uses fork tags)
-          if git rev-parse --verify --quiet "refs/tags/${{ steps.upstream_release.outputs.tag_name }}"; then
-            echo "Tag ${{ steps.upstream_release.outputs.tag_name }} already exists in fork. Skipping."
+          echo "Checking for existing release with tag '$TAG_NAME' in fork repository '$FORK_REPO'..."
+          # Attempt to view the release on the fork using the tag name.
+          # Redirect stderr to /dev/null to suppress "release not found" errors from gh.
+          # Check the exit code ($?) of the gh command. 0 means success (release found).
+          if gh release view "$TAG_NAME" --repo "$FORK_REPO" > /dev/null 2>&1; then
+            echo "Release with tag '$TAG_NAME' already exists in the fork '$FORK_REPO'. Skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Tag ${{ steps.upstream_release.outputs.tag_name }} does not exist in fork. Proceeding."
+            echo "Release with tag '$TAG_NAME' does not exist in the fork '$FORK_REPO'. Proceeding."
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Merge Upstream Tag
-        if: steps.check_tag.outputs.skip == 'false'
+        if: steps.check_fork_release.outputs.skip == 'false'
         run: |
           # IMPORTANT: Replace 'main' if your default branch is different (e.g., 'master')
           DEFAULT_BRANCH=main
@@ -130,7 +139,7 @@ jobs:
           }
 
       - name: Push Merge Commit
-        if: steps.check_tag.outputs.skip == 'false'
+        if: steps.check_fork_release.outputs.skip == 'false'
         run: |
           # IMPORTANT: Replace 'main' if your default branch is different
           DEFAULT_BRANCH=main
@@ -141,22 +150,22 @@ jobs:
 
       - uses: actions/setup-java@v4
         name: Setup Java
-        if: steps.check_tag.outputs.skip == 'false'
+        if: steps.check_fork_release.outputs.skip == 'false'
         with:
           distribution: temurin
           java-version: 17
 
       - uses: gradle/actions/setup-gradle@v3
         name: Setup Gradle
-        if: steps.check_tag.outputs.skip == 'false'
+        if: steps.check_fork_release.outputs.skip == 'false'
 
       - name: Execute Gradle build
-        if: steps.check_tag.outputs.skip == 'false'
+        if: steps.check_fork_release.outputs.skip == 'false'
         # Assuming the gradle wrapper is at the root
         run: ./gradlew build
 
       - name: Create Fork Release
-        if: steps.check_tag.outputs.skip == 'false'
+        if: steps.check_fork_release.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
         with:
           # Use the tag, name, body, and prerelease status from the upstream release
