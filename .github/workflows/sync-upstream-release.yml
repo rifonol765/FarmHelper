@@ -164,12 +164,33 @@ jobs:
           echo "Listing contents of build/libs:"
           ls -l build/libs || echo "build/libs directory not found or empty."
 
+      # --- BEGIN NEW/MOVED DEBUG STEP ---
+      - name: Debug Inputs JUST BEFORE Release Step
+        # Run only if the release step is also supposed to run
+        if: steps.check_fork_release.outputs.skip == 'false'
+        run: |
+          echo "--- Debugging values immediately before release ---"
+          echo "Value of steps.check_fork_release.outputs.skip: '${{ steps.check_fork_release.outputs.skip }}'"
+          echo "Value of steps.upstream_release.outputs.tag_name: '${{ steps.upstream_release.outputs.tag_name }}'"
+          echo "Value of steps.upstream_release.outputs.release_name: '${{ steps.upstream_release.outputs.release_name }}'"
+          # Add check for empty tag name again, just in case
+          if [[ -z "${{ steps.upstream_release.outputs.tag_name }}" ]]; then
+            echo "::error::Tag name is EMPTY right before release step!"
+            exit 1
+          fi
+          echo "--- End Debug ---"
+      # --- END NEW/MOVED DEBUG STEP ---
+
       # 14. Create the release in the fork (if needed)
       - name: Create Fork Release
         if: steps.check_fork_release.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          # ... (release details remain the same) ...
+          # Double-check this syntax very carefully
+          tag_name: ${{ steps.upstream_release.outputs.tag_name }}
+          name: ${{ steps.upstream_release.outputs.release_name }}
+          body: ${{ steps.upstream_release.outputs.release_body }}
+          prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
           files: |
             build/libs/*.jar
           token: ${{ secrets.GH_PAT }}
