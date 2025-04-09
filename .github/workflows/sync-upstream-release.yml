@@ -47,33 +47,52 @@ jobs:
         env:
           # Use built-in token for read-only API access here
           GH_TOKEN: ${{ github.token }}
-          # Upstream repository set here for gh command
+          # Upstream repository set here
           UPSTREAM_REPO: JellyLabScripts/FarmHelper
         run: |
-          echo "Fetching latest release from $UPSTREAM_REPO..."
-          # Get the very latest release (could be stable or pre-release)
-          latest_release_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName,isPrerelease,name,body)
+          echo "Fetching latest release tag from $UPSTREAM_REPO..."
+          # Get the tag name of the very latest release (stable or pre-release)
+          latest_release_tag_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName)
 
-          if [[ -z "$latest_release_json" || "$latest_release_json" == "[]" ]]; then
+          if [[ -z "$latest_release_tag_json" || "$latest_release_tag_json" == "[]" ]]; then
             echo "No releases found on upstream repository $UPSTREAM_REPO."
-            # Exit cleanly to avoid failing the scheduled run if no releases exist yet
             echo "No new release found. Exiting cleanly."
             exit 0 # Exit successfully
           fi
 
-          echo "Latest upstream release info: $latest_release_json"
-          tag_name=$(echo "$latest_release_json" | jq -r '.[0].tagName')
-          is_prerelease=$(echo "$latest_release_json" | jq -r '.[0].isPrerelease')
-          release_name=$(echo "$latest_release_json" | jq -r '.[0].name')
-          release_body=$(echo "$latest_release_json" | jq -r '.[0].body')
+          tag_name=$(echo "$latest_release_tag_json" | jq -r '.[0].tagName')
 
           # Check if tag_name is empty or null
           if [[ -z "$tag_name" || "$tag_name" == "null" ]]; then
-            echo "Could not extract tag name from latest release."
-            exit 1 # Exit with error if tag couldn't be extracted
+            echo "Could not extract tag name from the latest release listing."
+            exit 1 # Exit with error
           fi
 
-          echo "Latest upstream tag: $tag_name"
+          echo "Latest upstream tag found: $tag_name"
+          echo "Fetching details for tag $tag_name..."
+
+          # Now view the specific release details using the tag_name
+          release_details_json=$(gh release view "$tag_name" --repo $UPSTREAM_REPO --json tagName,isPrerelease,name,body)
+
+          if [[ -z "$release_details_json" ]]; then
+             echo "Could not fetch details for release tag $tag_name."
+             exit 1 # Exit with error
+          fi
+
+          echo "Full release details: $release_details_json"
+          # Re-verify tag name just in case, though it should match
+          fetched_tag_name=$(echo "$release_details_json" | jq -r '.tagName')
+          is_prerelease=$(echo "$release_details_json" | jq -r '.isPrerelease')
+          release_name=$(echo "$release_details_json" | jq -r '.name')
+          release_body=$(echo "$release_details_json" | jq -r '.body')
+
+          # Final check if details were retrieved correctly
+          if [[ -z "$fetched_tag_name" || "$fetched_tag_name" == "null" ]]; then
+             echo "Could not extract details from release view for tag $tag_name."
+             exit 1
+          fi
+
+          # Set outputs using the confirmed tag name from the initial list command
           echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
           echo "is_prerelease=$is_prerelease" >> $GITHUB_OUTPUT
           echo "release_name=$release_name" >> $GITHUB_OUTPUT
@@ -81,7 +100,7 @@ jobs:
           echo "release_body<<EOF" >> $GITHUB_OUTPUT
           echo "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
+          
       - name: Check if Tag Already Exists in Fork
         id: check_tag
         run: |
