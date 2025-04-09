@@ -43,14 +43,27 @@ jobs:
           # Try getting headers from upstream repo page
           curl -I https://github.com/JellyLabScripts/FarmHelper.git
 
-      - name: Fetch Upstream Tags # ADD GIT TRACE ENV VARS
-        env:
-          GIT_TRACE: 1         # Enable basic Git tracing
-          GIT_CURL_VERBOSE: 1  # Make Git's curl operations verbose
+      # ... (steps before fetching, like 'Add Upstream Remote', 'Check Remotes')
+
+      - name: Disable Git Auto Maintenance # ADD THIS STEP
         run: |
-          echo "Fetching upstream tags with maximum verbosity..."
-          # The -v flag is still useful alongside the env vars
+          echo "Disabling automatic Git maintenance..."
+          git config --local maintenance.auto false
+          # Optionally, be more explicit (though the above should suffice)
+          # git config --local maintenance.gc.enabled false
+          # git config --local maintenance.prefetch.enabled false
+          echo "Verifying Git maintenance config:"
+          git config --local --list | grep maintenance || echo "No local maintenance config found."
+
+      - name: Fetch Upstream Tags # Keep GIT_TRACE and GIT_CURL_VERBOSE for now, just in case
+        env:
+          GIT_TRACE: 1
+          GIT_CURL_VERBOSE: 1
+        run: |
+          echo "Fetching upstream tags with maximum verbosity (auto maintenance disabled)..."
           git fetch upstream --tags -v
+
+      # ... (rest of the steps)
 
       - name: Install GitHub CLI
         uses: github/hub@v2.14.2 # Installs 'hub', which bundles 'gh' CLI
