@@ -5,14 +5,12 @@ name: Sync Upstream Release and Build
 on:
   workflow_dispatch: # Allow manual triggering
   schedule:
-    # Runs every hour (adjust cron schedule as needed)
-    # See https://crontab.guru/ for help
+    # Runs every hour
     - cron: '0 * * * *'
 
 jobs:
   sync_and_build:
     runs-on: ubuntu-latest
-    # Prevent multiple runs if scheduled trigger overlaps with commits
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
@@ -21,9 +19,7 @@ jobs:
       - name: Checkout Fork Repository
         uses: actions/checkout@v4
         with:
-          # Fetch all history so we can check for existing tags and merge
           fetch-depth: 0
-          # Use PAT to allow pushing merge commits and creating releases
           token: ${{ secrets.GH_PAT }} # Ensure this secret exists in your fork
 
       - name: Set up Git
@@ -35,52 +31,30 @@ jobs:
         # Use the URL without .git for HTTPS
         run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper
 
-      - name: Check Remotes and Connectivity # ADDED DEBUG STEP
-        run: |
-          echo "--- Configured Remotes ---"
-          git remote -v
-          echo "--- Testing Connectivity to Upstream ---"
-          # Try getting headers from upstream repo page
-          curl -I https://github.com/JellyLabScripts/FarmHelper.git
-
-      # ... (steps before fetching, like 'Add Upstream Remote', 'Check Remotes')
-
-      - name: Disable Git Auto Maintenance # ADD THIS STEP
-        run: |
-          echo "Disabling automatic Git maintenance..."
-          git config --local maintenance.auto false
-          # Optionally, be more explicit (though the above should suffice)
-          # git config --local maintenance.gc.enabled false
-          # git config --local maintenance.prefetch.enabled false
-          echo "Verifying Git maintenance config:"
-          git config --local --list | grep maintenance || echo "No local maintenance config found."
-
-      # ... (steps before fetching: Add Upstream Remote)
-      # Note: Removed 'Check Remotes' and 'Disable Maintenance' for now to isolate fetch
-
-      - name: Fetch Upstream Tags - FOCUSED DEBUG
+      # --- Fetch Upstream Tags (Corrected Command) ---
+      # This step now fetches TAGS instead of just the master branch
+      # Verbose flags are kept temporarily for debugging if it fails again
+      - name: Fetch Upstream Tags
         env:
-          GIT_TRACE: 1             # Git internal tracing
-          GIT_TRACE_PACKET: 1    # Trace network packet data (more detail)
-          GIT_TRACE_PERFORMANCE: 1 # Trace performance data
-          GIT_CURL_VERBOSE: 1      # Verbose curl output
-          # Ensure no proxy interferes (usually not needed on GH runners)
+          GIT_TRACE: 1
+          GIT_TRACE_PACKET: 1
+          GIT_TRACE_PERFORMANCE: 1
+          GIT_CURL_VERBOSE: 1
           NO_PROXY: '*'
         run: |
           echo "================== GIT CONFIG BEFORE FETCH =================="
           git config --list --show-origin
-          echo "================== STARTING FETCH =================="
-          # Using the non-.git URL as determined before
-          # Adding --progress to see more feedback during potential hangs
-          # Adding --no-tags temporarily to see if fetching just branches works
-          # git fetch upstream --tags -v --progress
-          # LET'S TRY FETCHING ONLY THE DEFAULT BRANCH FIRST to simplify
-          git fetch upstream master -v --progress
+          echo "================== STARTING FETCH (TAGS) =================="
+          # --- THIS IS THE CRUCIAL LINE - Fetching --tags ---
+          git fetch upstream --tags -v --progress
           echo "================== FETCH COMMAND EXIT CODE: $? =================="
+          # Ensure the command succeeded before proceeding
+          if [ $? -ne 0 ]; then
+            echo "!! Fetch command failed with non-zero exit code !!"
+            exit 1
+          fi
 
-      # ... (rest of the steps, but they likely won't run if fetch fails)
-
-      # ... (rest of the steps)
+      # --- Subsequent Steps ---
 
       - name: Install GitHub CLI
         uses: github/hub@v2.14.2 # Installs 'hub', which bundles 'gh' CLI
@@ -88,12 +62,10 @@ jobs:
       - name: Install jq (JSON Processor)
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Get Latest Upstream Release Info # CORRECTED VERSION
+      - name: Get Latest Upstream Release Info
         id: upstream_release
         env:
-          # Use built-in token for read-only API access here
           GH_TOKEN: ${{ github.token }}
-          # Upstream repository set here
           UPSTREAM_REPO: JellyLabScripts/FarmHelper
         run: |
           echo "Fetching latest release tag from $UPSTREAM_REPO..."
@@ -140,7 +112,7 @@ jobs:
           echo "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Check if Release Exists in Fork for this Tag # CORRECTED CHECK
+      - name: Check if Release Exists in Fork for this Tag
         id: check_fork_release
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -157,26 +129,23 @@ jobs:
           fi
 
       - name: Merge Upstream Tag
-        # Use the corrected check step ID and updated branch name
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # UPDATED: Use 'master' as the default branch
-          DEFAULT_BRANCH=master
+          DEFAULT_BRANCH=master # Using master as default branch
           git checkout $DEFAULT_BRANCH
           echo "Pulling latest changes from fork's origin $DEFAULT_BRANCH..."
           git pull origin $DEFAULT_BRANCH
           echo "Attempting to merge upstream tag ${{ steps.upstream_release.outputs.tag_name }} into $DEFAULT_BRANCH..."
+          # Use the specific tag ref fetched from upstream
           git merge "refs/tags/${{ steps.upstream_release.outputs.tag_name }}" --no-ff -m "Merge upstream tag ${{ steps.upstream_release.outputs.tag_name }}" || {
             echo "Merge failed. Please resolve conflicts manually."
             exit 1
           }
 
       - name: Push Merge Commit
-        # Use the corrected check step ID and updated branch name
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # UPDATED: Use 'master' as the default branch
-          DEFAULT_BRANCH=master
+          DEFAULT_BRANCH=master # Using master as default branch
           echo "Pushing merge commit to origin/$DEFAULT_BRANCH..."
           git push origin $DEFAULT_BRANCH
 
@@ -218,10 +187,7 @@ jobs:
           name: ${{ steps.upstream_release.outputs.release_name }}
           body: ${{ steps.upstream_release.outputs.release_body }}
           prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
-          # IMPORTANT: Verify this path based on the 'List build artifacts' step output
+          # Make sure this path is correct based on 'List build artifacts' output
           files: |
             build/libs/*.jar
           token: ${{ secrets.GH_PAT }} # Use PAT for release creation
-
-      # Optional: Add steps here to notify via Discord etc., using the release info
-      # from steps.upstream_release.outputs and the build artifact path.
