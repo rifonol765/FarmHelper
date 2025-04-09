@@ -32,8 +32,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Add Upstream Remote
-        # Upstream repository set here
-        run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper.git
+        # Use the URL without .git for HTTPS
+        run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper
 
       - name: Check Remotes and Connectivity # ADDED DEBUG STEP
         run: |
