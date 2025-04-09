@@ -126,7 +126,7 @@ jobs:
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
           # IMPORTANT: Replace 'main' if your default branch is different (e.g., 'master')
-          DEFAULT_BRANCH=main
+          DEFAULT_BRANCH=master
           git checkout $DEFAULT_BRANCH
           echo "Pulling latest changes from fork's origin $DEFAULT_BRANCH..."
           git pull origin $DEFAULT_BRANCH
