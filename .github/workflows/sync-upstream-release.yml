@@ -20,9 +20,7 @@ jobs:
       - name: Checkout Fork Repository
         uses: actions/checkout@v4
         with:
-          # fetch-depth: 0 gets all history needed for merging
           fetch-depth: 0
-          # PAT is needed to push merge commits and create releases
           token: ${{ secrets.GH_PAT }} # Ensure this secret exists in your fork
 
       # 2. Configure Git user for commits made by the action
@@ -33,17 +31,15 @@ jobs:
 
       # 3. Add the upstream repository as a remote
       - name: Add Upstream Remote
-        run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper # Use HTTPS URL
+        run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper
 
       # 4. Get info about the LATEST release from UPSTREAM (tag, name, body, prerelease status)
       - name: Get Latest Upstream Release Info
         id: upstream_release
         env:
-          # Use the built-in token for read-only API access to upstream
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_REPO: JellyLabScripts/FarmHelper
         run: |
-          # Use the robust script from section 4.4 above
           echo "Fetching latest release tag info from $UPSTREAM_REPO..."
           if ! latest_release_tag_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName); then
             echo "::error::Failed to run 'gh release list'."
@@ -74,7 +70,8 @@ jobs:
           release_body=$(echo "$release_details_json" | jq -r '.body')
           echo "is_prerelease=$is_prerelease" >> $GITHUB_OUTPUT
           echo "release_name=$release_name" >> $GITHUB_OUTPUT
-          echo "release_body<<EOF" >> $GITHUB_OUTPUT
+          # Output the ORIGINAL body for sanitization step
+          echo "original_release_body<<EOF" >> $GITHUB_OUTPUT
           echo "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           echo "Successfully retrieved and processed upstream release details."
@@ -83,14 +80,10 @@ jobs:
       - name: Check if Release Exists in Fork for this Tag
         id: check_fork_release
         env:
-          # Use PAT here in case fork is private, ensures permission
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          # github.repository is the name of the fork (e.g., YourName/FarmHelper)
           FORK_REPO: ${{ github.repository }}
-          # Use the tag name retrieved in the previous step
           TAG_NAME: ${{ steps.upstream_release.outputs.tag_name }}
         run: |
-          # Use the robust script from section 4.5 above
           echo "Checking for existing release with tag '$TAG_NAME' in fork repository '$FORK_REPO'..."
           if gh release view "$TAG_NAME" --repo "$FORK_REPO" > /dev/null 2>&1; then
             echo "Release with tag '$TAG_NAME' already exists in the fork '$FORK_REPO'. Skipping."
@@ -100,11 +93,11 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
+      # --- Start: Synchronization Steps (Run only if needed) ---
       # 6. Fetch ONLY the required tag and master branch from upstream (if needed)
       - name: Fetch Specific Upstream Tag and Master Branch
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # Use the robust script from section 4.8 above
           TARGET_TAG="${{ steps.upstream_release.outputs.tag_name }}"
           DEFAULT_BRANCH=master # Your default branch
           echo "Fetching specific tag '$TARGET_TAG' and branch '$DEFAULT_BRANCH' from upstream..."
@@ -138,9 +131,9 @@ jobs:
           DEFAULT_BRANCH=master # Your default branch
           echo "Pushing merge commit to origin/$DEFAULT_BRANCH..."
           git push origin $DEFAULT_BRANCH
+      # --- End: Synchronization Steps ---
 
-      # --- Build Steps (Run only if merge happened) ---
-
+      # --- Start: Build Steps (Run only if merge happened or skip=false) ---
       # 9. Set up Java environment
       - uses: actions/setup-java@v4
         name: Setup Java
@@ -150,7 +143,7 @@ jobs:
           java-version: 17
 
       # 10. Set up Gradle environment (Includes Caching)
-      - uses: gradle/actions/setup-gradle@v3 # This action handles Gradle caching
+      - uses: gradle/actions/setup-gradle@v3
         name: Setup Gradle
         if: steps.check_fork_release.outputs.skip == 'false'
 
@@ -165,8 +158,27 @@ jobs:
         run: |
           echo "Listing contents of build/libs:"
           ls -l build/libs || echo "build/libs directory not found or empty."
+      # --- End: Build Steps ---
 
-      # 13. Create the release in the fork, mirroring upstream details (if needed)
+      # --- Start: Release Steps (Run only if merge happened or skip=false) ---
+      # 13. Sanitize Release Body (Prevent @mentions)
+      - name: Sanitize Release Body
+        id: sanitize_body
+        if: steps.check_fork_release.outputs.skip == 'false'
+        run: |
+          # Use sed to insert a zero-width space (\u200B) after @ symbols followed by username characters
+          # This breaks the GitHub auto-linking/mentioning feature
+          # Input is the multi-line output 'original_release_body' from the upstream_release step
+          # The $'' syntax interprets the unicode escape sequence in bash
+          sanitized_body=$(echo "${{ steps.upstream_release.outputs.original_release_body }}" | sed -E 's/@([A-Za-z0-9-]+)/@$'\\u200B'\\1/g')
+
+          # Output the sanitized body for the release step
+          echo "sanitized_release_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$sanitized_body" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Release body sanitized."
+
+      # 14. Create the release in the fork, mirroring upstream details
       - name: Create Fork Release
         if: steps.check_fork_release.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
@@ -174,10 +186,12 @@ jobs:
           # Use details retrieved from the upstream release
           tag_name: ${{ steps.upstream_release.outputs.tag_name }}
           name: ${{ steps.upstream_release.outputs.release_name }}
-          body: ${{ steps.upstream_release.outputs.release_body }}
+          # Use the SANITIZED body from the previous step
+          body: ${{ steps.sanitize_body.outputs.sanitized_release_body }}
           prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
           # Attach the built JAR file(s)
           files: |
             build/libs/*.jar
           # Use the PAT token to grant permission to create the release
           token: ${{ secrets.GH_PAT }}
+      # --- End: Release Steps ---
