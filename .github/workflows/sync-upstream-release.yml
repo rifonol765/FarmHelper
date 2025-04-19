@@ -20,10 +20,12 @@ jobs:
       - name: Checkout Fork Repository
         uses: actions/checkout@v4
         with:
+          # fetch-depth: 0 gets all history needed for merging
           fetch-depth: 0
-          token: ${{ secrets.GH_PAT }}
+          # PAT is needed to push merge commits and create releases
+          token: ${{ secrets.GH_PAT }} # Ensure this secret exists in your fork
 
-      # 2. Configure Git user
+      # 2. Configure Git user for commits made by the action
       - name: Set up Git
         run: |
           git config user.name "github-actions[bot]"
@@ -31,115 +33,115 @@ jobs:
 
       # 3. Add the upstream repository as a remote
       - name: Add Upstream Remote
-        run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper
+        run: git remote add upstream https://github.com/JellyLabScripts/FarmHelper # Use HTTPS URL
 
-      # 4. Install necessary tools - REMOVED!
-      # - name: Install GitHub CLI  # NO LONGER NEEDED
-      #   uses: github/hub@v2.14.2   # NO LONGER NEEDED
-      # - name: Install jq (JSON Processor) # NO LONGER NEEDED
-      #   run: sudo apt-get update && sudo apt-get install -y jq # NO LONGER NEEDED
-
-      # 5. Get info about the LATEST release from UPSTREAM
+      # 4. Get info about the LATEST release from UPSTREAM (tag, name, body, prerelease status)
       - name: Get Latest Upstream Release Info
         id: upstream_release
         env:
+          # Use the built-in token for read-only API access to upstream
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_REPO: JellyLabScripts/FarmHelper
         run: |
+          # Use the robust script from section 4.4 above
           echo "Fetching latest release tag info from $UPSTREAM_REPO..."
-          # Capture potential errors from gh release list
           if ! latest_release_tag_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName); then
             echo "::error::Failed to run 'gh release list'."
             exit 1
           fi
-
-          echo "Raw gh release list output: $latest_release_tag_json" # Add this for debugging
-
+          echo "Raw gh release list output: $latest_release_tag_json"
           if [[ -z "$latest_release_tag_json" || "$latest_release_tag_json" == "[]" ]]; then
             echo "No releases found on upstream repository $UPSTREAM_REPO."
             echo "No new release found. Exiting cleanly."
-            # Set an empty tag output so subsequent steps know? Or just exit 0?
-            # Exiting 0 is cleaner as the 'skip' check handles it.
             exit 0
           fi
-
-          # Attempt to extract tag_name, capture jq exit code
           tag_name=$(echo "$latest_release_tag_json" | jq -r '.[0].tagName')
           jq_exit_code=$?
-
-          # Check BOTH jq exit code AND if the result is empty/null
           if [[ $jq_exit_code -ne 0 || -z "$tag_name" || "$tag_name" == "null" ]]; then
             echo "::error::Could not extract valid tag name from gh output. jq exit code: $jq_exit_code, extracted value: '$tag_name'"
             exit 1
           fi
-
-          # --- If we got here, tag_name is valid ---
           echo "Latest upstream tag found: $tag_name"
-          # Set the output IMMEDIATELY after confirming it's valid
           echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
-          echo "Output 'tag_name' set to '$tag_name'" # Add confirmation
-
+          echo "Output 'tag_name' set to '$tag_name'"
           echo "Fetching details for tag $tag_name..."
-          # Use gh release view to get details including the body
           if ! release_details_json=$(gh release view "$tag_name" --repo $UPSTREAM_REPO --json isPrerelease,name,body); then
              echo "::error::Could not fetch details for release tag '$tag_name' using 'gh release view'."
              exit 1
           fi
-
-          # Extract details (only if gh release view succeeded)
           is_prerelease=$(echo "$release_details_json" | jq -r '.isPrerelease')
           release_name=$(echo "$release_details_json" | jq -r '.name')
           release_body=$(echo "$release_details_json" | jq -r '.body')
-
-          # Set remaining outputs
           echo "is_prerelease=$is_prerelease" >> $GITHUB_OUTPUT
           echo "release_name=$release_name" >> $GITHUB_OUTPUT
           echo "release_body<<EOF" >> $GITHUB_OUTPUT
           echo "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
           echo "Successfully retrieved and processed upstream release details."
 
-      # 6. Check if a release with this EXACT tag already exists in THIS fork
-      #    (This step uses 'gh' directly)
+      # 5. Check if a release with this EXACT tag already exists in THIS fork
       - name: Check if Release Exists in Fork for this Tag
         id: check_fork_release
         env:
+          # Use PAT here in case fork is private, ensures permission
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          # github.repository is the name of the fork (e.g., YourName/FarmHelper)
           FORK_REPO: ${{ github.repository }}
+          # Use the tag name retrieved in the previous step
           TAG_NAME: ${{ steps.upstream_release.outputs.tag_name }}
         run: |
+          # Use the robust script from section 4.5 above
           echo "Checking for existing release with tag '$TAG_NAME' in fork repository '$FORK_REPO'..."
-          # gh command works because it's pre-installed
           if gh release view "$TAG_NAME" --repo "$FORK_REPO" > /dev/null 2>&1; then
-            echo "Release with tag '$TAG_NAME' already exists... Skipping."
+            echo "Release with tag '$TAG_NAME' already exists in the fork '$FORK_REPO'. Skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
           else
-            echo "Release with tag '$TAG_NAME' does not exist... Proceeding."
+            echo "Release with tag '$TAG_NAME' does not exist in the fork '$FORK_REPO'. Proceeding."
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-      # 7. Fetch ONLY the required tag and master branch from upstream (if needed)
+      # 6. Fetch ONLY the required tag and master branch from upstream (if needed)
       - name: Fetch Specific Upstream Tag and Master Branch
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # ... (git fetch commands remain the same) ...
+          # Use the robust script from section 4.8 above
+          TARGET_TAG="${{ steps.upstream_release.outputs.tag_name }}"
+          DEFAULT_BRANCH=master # Your default branch
+          echo "Fetching specific tag '$TARGET_TAG' and branch '$DEFAULT_BRANCH' from upstream..."
+          git fetch upstream "refs/tags/$TARGET_TAG:refs/tags/$TARGET_TAG" -v --progress --no-tags || { echo "Failed to fetch tag $TARGET_TAG"; exit 1; }
+          git fetch upstream "$DEFAULT_BRANCH" -v --progress --no-tags || { echo "Failed to fetch branch $DEFAULT_BRANCH"; exit 1; }
+          echo "Fetch commands finished successfully."
+          echo "Verifying local tag '$TARGET_TAG' exists..."
+          git tag -l "$TARGET_TAG" || { echo "Local tag '$TARGET_TAG' not found after fetch!"; exit 1; }
+          echo "Local tag verified."
 
-      # 8. Merge the fetched upstream tag (if needed)
+      # 7. Merge the fetched upstream tag into the fork's master branch (if needed)
       - name: Merge Upstream Tag
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # ... (git merge commands remain the same) ...
+          DEFAULT_BRANCH=master # Your default branch
+          TARGET_TAG="${{ steps.upstream_release.outputs.tag_name }}"
+          git checkout $DEFAULT_BRANCH
+          echo "Pulling latest changes from fork's origin $DEFAULT_BRANCH..."
+          git pull origin $DEFAULT_BRANCH || { echo "Pull from origin failed"; exit 1; }
+          echo "Attempting to merge upstream tag $TARGET_TAG into $DEFAULT_BRANCH..."
+          git merge "refs/tags/$TARGET_TAG" --no-ff -m "Merge upstream tag $TARGET_TAG" || {
+            echo "::error::Merge failed. Please resolve conflicts manually in the fork."
+            exit 1
+          }
+          echo "Merge successful."
 
-      # 9. Push the merge commit (if needed)
+      # 8. Push the merge commit back to the fork's repository (if needed)
       - name: Push Merge Commit
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # ... (git push command remains the same) ...
+          DEFAULT_BRANCH=master # Your default branch
+          echo "Pushing merge commit to origin/$DEFAULT_BRANCH..."
+          git push origin $DEFAULT_BRANCH
 
       # --- Build Steps (Run only if merge happened) ---
 
-      # 10. Set up Java environment
+      # 9. Set up Java environment
       - uses: actions/setup-java@v4
         name: Setup Java
         if: steps.check_fork_release.outputs.skip == 'false'
@@ -147,50 +149,35 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # 11. Set up Gradle environment (Includes Caching)
+      # 10. Set up Gradle environment (Includes Caching)
       - uses: gradle/actions/setup-gradle@v3 # This action handles Gradle caching
         name: Setup Gradle
         if: steps.check_fork_release.outputs.skip == 'false'
 
-      # 12. Execute the Gradle build command
+      # 11. Execute the Gradle build command
       - name: Execute Gradle build
         if: steps.check_fork_release.outputs.skip == 'false'
         run: ./gradlew build
 
-      # 13. List build artifacts (for verification)
+      # 12. List build artifacts (for verification)
       - name: List build artifacts
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
           echo "Listing contents of build/libs:"
           ls -l build/libs || echo "build/libs directory not found or empty."
 
-      # --- BEGIN NEW/MOVED DEBUG STEP ---
-      - name: Debug Inputs JUST BEFORE Release Step
-        # Run only if the release step is also supposed to run
-        if: steps.check_fork_release.outputs.skip == 'false'
-        run: |
-          echo "--- Debugging values immediately before release ---"
-          echo "Value of steps.check_fork_release.outputs.skip: '${{ steps.check_fork_release.outputs.skip }}'"
-          echo "Value of steps.upstream_release.outputs.tag_name: '${{ steps.upstream_release.outputs.tag_name }}'"
-          echo "Value of steps.upstream_release.outputs.release_name: '${{ steps.upstream_release.outputs.release_name }}'"
-          # Add check for empty tag name again, just in case
-          if [[ -z "${{ steps.upstream_release.outputs.tag_name }}" ]]; then
-            echo "::error::Tag name is EMPTY right before release step!"
-            exit 1
-          fi
-          echo "--- End Debug ---"
-      # --- END NEW/MOVED DEBUG STEP ---
-
-      # 14. Create the release in the fork (if needed)
+      # 13. Create the release in the fork, mirroring upstream details (if needed)
       - name: Create Fork Release
         if: steps.check_fork_release.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          # Double-check this syntax very carefully
+          # Use details retrieved from the upstream release
           tag_name: ${{ steps.upstream_release.outputs.tag_name }}
           name: ${{ steps.upstream_release.outputs.release_name }}
           body: ${{ steps.upstream_release.outputs.release_body }}
           prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
+          # Attach the built JAR file(s)
           files: |
             build/libs/*.jar
+          # Use the PAT token to grant permission to create the release
           token: ${{ secrets.GH_PAT }}
