@@ -10,24 +10,28 @@ on:
 
 jobs:
   sync_and_build:
-    runs-on: ubuntu-latest # gh and jq are pre-installed here
+    runs-on: ubuntu-latest
+    # Ensure default GITHUB_TOKEN has write permissions
+    permissions:
+      contents: write # Needed for checkout, push, and release creation
+      # Add other permissions if needed by other steps (none obvious here)
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
 
     steps:
-      # 1. Checkout the fork repository
+      # 1. Checkout the fork repository using GITHUB_TOKEN
       - name: Checkout Fork Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_PAT }} # Ensure this secret exists in your fork
+          token: ${{ secrets.GITHUB_TOKEN }} # Use GITHUB_TOKEN for actions in this repo
 
       # 2. Configure Git user for commits made by the action
       - name: Set up Git
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com" # Standard email for the bot
 
       # 3. Add the upstream repository as a remote
       - name: Add Upstream Remote
@@ -37,10 +41,11 @@ jobs:
       - name: Get Latest Upstream Release Info
         id: upstream_release
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Use GITHUB_TOKEN for read-only access to public upstream repo
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPSTREAM_REPO: JellyLabScripts/FarmHelper
         run: |
-          # Script content from previous correct version...
+          # Script content remains the same as before...
           echo "Fetching latest release tag info from $UPSTREAM_REPO..."
           if ! latest_release_tag_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName); then
             echo "::error::Failed to run 'gh release list'."
@@ -50,7 +55,7 @@ jobs:
           if [[ -z "$latest_release_tag_json" || "$latest_release_tag_json" == "[]" ]]; then
             echo "No releases found on upstream repository $UPSTREAM_REPO."
             echo "No new release found. Exiting cleanly."
-            exit 0
+            exit 0 # Use exit 0 for clean exit when no new release is found
           fi
           tag_name=$(echo "$latest_release_tag_json" | jq -r '.[0].tagName')
           jq_exit_code=$?
@@ -71,7 +76,6 @@ jobs:
           release_body=$(echo "$release_details_json" | jq -r '.body')
           echo "is_prerelease=$is_prerelease" >> $GITHUB_OUTPUT
           echo "release_name=$release_name" >> $GITHUB_OUTPUT
-          # Output the ORIGINAL body for sanitization step
           echo "original_release_body<<EOF" >> $GITHUB_OUTPUT
           echo "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -81,10 +85,12 @@ jobs:
       - name: Check if Release Exists in Fork for this Tag
         id: check_fork_release
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Use GITHUB_TOKEN to check releases within the fork repo
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORK_REPO: ${{ github.repository }}
           TAG_NAME: ${{ steps.upstream_release.outputs.tag_name }}
         run: |
+          # Script content remains the same...
           echo "Checking for existing release with tag '$TAG_NAME' in fork repository '$FORK_REPO'..."
           if gh release view "$TAG_NAME" --repo "$FORK_REPO" > /dev/null 2>&1; then
             echo "Release with tag '$TAG_NAME' already exists in the fork '$FORK_REPO'. Skipping."
@@ -99,6 +105,7 @@ jobs:
       - name: Fetch Specific Upstream Tag and Master Branch
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
+          # Script content remains the same...
           TARGET_TAG="${{ steps.upstream_release.outputs.tag_name }}"
           DEFAULT_BRANCH=master # Your default branch
           echo "Fetching specific tag '$TARGET_TAG' and branch '$DEFAULT_BRANCH' from upstream..."
@@ -113,10 +120,12 @@ jobs:
       - name: Merge Upstream Tag
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
+          # Script content remains the same...
           DEFAULT_BRANCH=master # Your default branch
           TARGET_TAG="${{ steps.upstream_release.outputs.tag_name }}"
           git checkout $DEFAULT_BRANCH
           echo "Pulling latest changes from fork's origin $DEFAULT_BRANCH..."
+          # Git pull will use credentials set up by checkout step (GITHUB_TOKEN)
           git pull origin $DEFAULT_BRANCH || { echo "Pull from origin failed"; exit 1; }
           echo "Attempting to merge upstream tag $TARGET_TAG into $DEFAULT_BRANCH..."
           git merge "refs/tags/$TARGET_TAG" --no-ff -m "Merge upstream tag $TARGET_TAG" || {
@@ -129,6 +138,7 @@ jobs:
       - name: Push Merge Commit
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
+          # Git push will use credentials set up by checkout step (GITHUB_TOKEN)
           DEFAULT_BRANCH=master # Your default branch
           echo "Pushing merge commit to origin/$DEFAULT_BRANCH..."
           git push origin $DEFAULT_BRANCH
@@ -167,15 +177,9 @@ jobs:
         id: sanitize_body
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # Generate the zero-width space character using printf (more reliable)
+          # Script content remains the same...
           ZWS=$(printf '\u200b')
-
-          # Use double quotes for the sed expression to allow variable expansion (${ZWS})
-          # Escape the backreference (\1) for sed -> \\1
-          # Input is the multi-line output 'original_release_body'
           sanitized_body=$(echo "${{ steps.upstream_release.outputs.original_release_body }}" | sed -E "s/@([A-Za-z0-9-]+)/@${ZWS}\\1/g")
-
-          # Output the sanitized body for the release step
           echo "sanitized_release_body<<EOF" >> $GITHUB_OUTPUT
           echo "$sanitized_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -186,15 +190,12 @@ jobs:
         if: steps.check_fork_release.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          # Use details retrieved from the upstream release
           tag_name: ${{ steps.upstream_release.outputs.tag_name }}
           name: ${{ steps.upstream_release.outputs.release_name }}
-          # Use the SANITIZED body from the previous step
           body: ${{ steps.sanitize_body.outputs.sanitized_release_body }}
           prerelease: ${{ steps.upstream_release.outputs.is_prerelease == 'true' }}
-          # Attach the built JAR file(s)
           files: |
             build/libs/*.jar
-          # Use the PAT token to grant permission to create the release
-          token: ${{ secrets.GH_PAT }}
+          # Use GITHUB_TOKEN to create the release as the Actions bot
+          token: ${{ secrets.GITHUB_TOKEN }}
       # --- End: Release Steps ---
