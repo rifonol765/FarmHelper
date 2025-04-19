@@ -40,6 +40,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_REPO: JellyLabScripts/FarmHelper
         run: |
+          # Script content from previous correct version...
           echo "Fetching latest release tag info from $UPSTREAM_REPO..."
           if ! latest_release_tag_json=$(gh release list --repo $UPSTREAM_REPO --limit 1 --json tagName); then
             echo "::error::Failed to run 'gh release list'."
@@ -161,22 +162,24 @@ jobs:
       # --- End: Build Steps ---
 
       # --- Start: Release Steps (Run only if merge happened or skip=false) ---
-      # 13. Sanitize Release Body (Prevent @mentions)
+      # 13. Sanitize Release Body (Prevent @mentions) - Revised
       - name: Sanitize Release Body
         id: sanitize_body
         if: steps.check_fork_release.outputs.skip == 'false'
         run: |
-          # Use sed to insert a zero-width space (\u200B) after @ symbols followed by username characters
-          # This breaks the GitHub auto-linking/mentioning feature
-          # Input is the multi-line output 'original_release_body' from the upstream_release step
-          # The $'' syntax interprets the unicode escape sequence in bash
-          sanitized_body=$(echo "${{ steps.upstream_release.outputs.original_release_body }}" | sed -E 's/@([A-Za-z0-9-]+)/@$'\\u200B'\\1/g')
+          # Generate the zero-width space character using printf (more reliable)
+          ZWS=$(printf '\u200b')
+
+          # Use double quotes for the sed expression to allow variable expansion (${ZWS})
+          # Escape the backreference (\1) for sed -> \\1
+          # Input is the multi-line output 'original_release_body'
+          sanitized_body=$(echo "${{ steps.upstream_release.outputs.original_release_body }}" | sed -E "s/@([A-Za-z0-9-]+)/@${ZWS}\\1/g")
 
           # Output the sanitized body for the release step
           echo "sanitized_release_body<<EOF" >> $GITHUB_OUTPUT
           echo "$sanitized_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          echo "Release body sanitized."
+          echo "Release body sanitized (attempt 2)."
 
       # 14. Create the release in the fork, mirroring upstream details
       - name: Create Fork Release
