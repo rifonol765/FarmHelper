@@ -299,7 +299,7 @@ public class FailsafeManager {
             return;
         }
 
-        if (FarmHelperConfig.failsafeAction)
+        if (!FarmHelperConfig.failsafeAction)
             triggeredFailsafe.get().duringFailsafeTrigger();
     }
 
